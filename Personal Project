@@ -1,0 +1,112 @@
+import yfinance as yf
+import pandas as pd
+from dash import Dash, dcc, html, Input, Output
+import plotly.graph_objects as go
+
+# Initialize the app
+app = Dash(__name__)
+
+# Layout of the app
+app.layout = html.Div([
+    html.H1("Stock Market Dashboard", style={'textAlign': 'center'}),
+    
+    html.Div([
+        html.Label("Enter Stock Symbols (comma-separated):"),
+        dcc.Input(id="stock-input", type="text", placeholder="e.g., AAPL, MSFT", debounce=True),
+    ], style={'padding': '10px'}),
+    
+    html.Div([
+        html.Label("Select Date Range:"),
+        dcc.DatePickerRange(
+            id="date-picker",
+            start_date=None,
+            end_date=None,
+        ),
+    ], style={'padding': '10px'}),
+    
+    html.Div([
+        html.Label("Enter Moving Averages (comma-separated):"),
+        dcc.Input(id="ma-input", type="text", placeholder="e.g., 50, 200", debounce=True),
+    ], style={'padding': '10px'}),
+    
+    html.Button("Submit", id="submit-button", n_clicks=0, style={'margin': '10px'}),
+    html.Div(id="error-message", style={'color': 'red', 'padding': '10px'}),
+    
+    html.Div(id="stock-charts")
+])
+
+# Callback to fetch data and update the graphs
+@app.callback(
+    [Output("stock-charts", "children"),
+     Output("error-message", "children")],
+    [Input("submit-button", "n_clicks")],
+    [Input("stock-input", "value"),
+     Input("date-picker", "start_date"),
+     Input("date-picker", "end_date"),
+     Input("ma-input", "value")]
+)
+def update_charts(n_clicks, stock_symbols, start_date, end_date, ma_values):
+    if not stock_symbols:
+        return [], "Please enter at least one stock symbol."
+    
+    try:
+        stock_symbols = [s.strip().upper() for s in stock_symbols.split(",")]
+        ma_windows = [int(ma.strip()) for ma in ma_values.split(",")] if ma_values else []
+        charts = []
+
+        for symbol in stock_symbols:
+            # Fetch data from YFinance
+            stock = yf.Ticker(symbol)
+            data = stock.history(start=start_date, end=end_date)
+
+            if data.empty:
+                charts.append(html.Div(f"No data available for {symbol}.", style={'color': 'red'}))
+                continue
+
+            # Calculate Moving Averages
+            for ma in ma_windows:
+                data[f"MA{ma}"] = data['Close'].rolling(window=ma).mean()
+
+            # Create the plot
+            fig = go.Figure()
+
+            # Add Close Price line
+            fig.add_trace(go.Scatter(
+                x=data.index, y=data['Close'], mode='lines', name=f"{symbol} Close Price",
+                line=dict(color='blue')
+            ))
+
+            # Add Moving Averages
+            for ma in ma_windows:
+                if f"MA{ma}" in data.columns:
+                    fig.add_trace(go.Scatter(
+                        x=data.index, y=data[f"MA{ma}"], mode='lines', name=f"{symbol} MA{ma}",
+                        line=dict(dash='dot')
+                    ))
+
+            # Add Volume as a bar chart
+            fig.add_trace(go.Bar(
+                x=data.index, y=data['Volume'], name=f"{symbol} Volume",
+                marker=dict(color='gray'), yaxis='y2'
+            ))
+
+            # Configure layout
+            fig.update_layout(
+                title=f"Stock Price and Volume: {symbol}",
+                xaxis_title="Date",
+                yaxis_title="Stock Price (USD)",
+                yaxis2=dict(title="Volume", overlaying="y", side="right"),
+                template="plotly_white",
+            )
+
+            # Append each chart to the output
+            charts.append(dcc.Graph(figure=fig, style={'marginBottom': '50px'}))
+
+        return charts, ""
+
+    except Exception as e:
+        return [], f"An error occurred: {e}"
+
+# Run the app
+if __name__ == "__main__":
+    app.run_server(debug=True)
